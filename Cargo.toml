@@ -8,3 +8,4 @@ axum = { version = "0.8.8", features = ["multipart"] }
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "net"] }
 bytes = "1.5"
+tower-http = { version = "0.6.2", features = ["fs"] }

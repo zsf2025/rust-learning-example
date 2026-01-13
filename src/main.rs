@@ -1,9 +1,11 @@
 use axum::{routing::{ get, post }, Router, serve, body::Bytes, extract::{ Path, Query, Json, Multipart, Form }, http::StatusCode, response::IntoResponse };
 use tokio::net::TcpListener;
 use serde::{Deserialize, Serialize};
-
+use std::path::PathBuf;
+use tower_http::services::ServeDir;
 
 // 返回 &'static str（静态字符串，Axum 自动转为 200 OK 响应）
+#[allow(unused)]
 async fn hello_world() -> &'static str {
     "Hello, Axum! 🚀"
 }
@@ -70,8 +72,6 @@ async fn echo_binary(body: Bytes) -> impl IntoResponse {
     (StatusCode::OK, format!("Received {} bytes", body.len()))
 }
 
-
-
 #[tokio::main]
     // 给 main 加返回值：Result<(), 错误类型>
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -84,7 +84,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .route("/form-urlencoded", post(form_urlencoded))
     .route("/binary", post(echo_binary))
     // 绑定路由：GET 方法 + 路径 "/" + 处理函数 hello_world
-    .route("/", get(hello_world));
+    // .route("/", get(hello_world))
+
+    .fallback_service(ServeDir::new(PathBuf::from("static")));
+
+
     // 绑定端口（返回 Result，需用 ? 处理错误）
     let listener = TcpListener::bind("127.0.0.1:3000").await?;
     println!("服务器启动成功！访问：http://127.0.0.1:3000");

@@ -1,6 +1,7 @@
-use axum::{routing::{ get, post }, Router, serve, extract::{ Path, Query, Json }, http::StatusCode, response::IntoResponse };
+use axum::{routing::{ get, post }, Router, serve, body::Bytes, extract::{ Path, Query, Json, Multipart, Form }, http::StatusCode, response::IntoResponse };
 use tokio::net::TcpListener;
 use serde::{Deserialize, Serialize};
+
 
 // 返回 &'static str（静态字符串，Axum 自动转为 200 OK 响应）
 async fn hello_world() -> &'static str {
@@ -36,11 +37,40 @@ struct Payload {
     msg: String,
 }
 
+// JSON 数据处理
 async fn echo_json(Json(payload): Json<Payload>) -> impl IntoResponse {
     (StatusCode::OK, Json(Payload {
         msg: format!("Echo: {}", payload.msg),
     }))
 }
+
+// form-data 数据处理
+async fn form_data(mut multipart: Multipart) -> impl IntoResponse {
+    println!("Processing form data:");
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = field.name().unwrap_or("unknown").to_string();
+        let data = field.text().await.unwrap_or_default();
+        println!("Field Name: {}, Data: {}", name, data);
+    }
+    (StatusCode::OK, "Form data processed successfully.")
+}
+
+#[derive(Debug, Deserialize)]
+struct User {
+    name: String,
+    say: String,
+}
+// form-urlencoded 数据处理
+async fn form_urlencoded(Form(user): Form<User>) -> impl IntoResponse {
+    println!("Received user: {:?}", user);
+    (StatusCode::OK, format!("Received name: {}, say: {}", user.name, user.say))
+}
+// 二进制数据处理
+async fn echo_binary(body: Bytes) -> impl IntoResponse {
+    (StatusCode::OK, format!("Received {} bytes", body.len()))
+}
+
+
 
 #[tokio::main]
     // 给 main 加返回值：Result<(), 错误类型>
@@ -50,6 +80,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .route("/echo", post(echo_json))
     .route("/greet", get(greet))
     .route("/hello/{name}", get(hello_name))
+    .route("/form-data", post(form_data))
+    .route("/form-urlencoded", post(form_urlencoded))
+    .route("/binary", post(echo_binary))
     // 绑定路由：GET 方法 + 路径 "/" + 处理函数 hello_world
     .route("/", get(hello_world));
     // 绑定端口（返回 Result，需用 ? 处理错误）

@@ -3,9 +3,9 @@
  * @Author: zhangfu 18072150332@163.com
  * @Date: 2026-01-09 22:06:06
  * @LastEditors: zhangfu 18072150332@163.com
- * @LastEditTime: 2026-01-14 22:29:19
+ * @LastEditTime: 2026-01-15 09:46:23
  */
-use axum::{routing::{ get, post }, Router, serve, body::Bytes, extract::{ Path, Query, Json, Multipart, Form }, http::StatusCode, response::IntoResponse };
+use axum::{routing::{ get, post }, Router, serve, body::Bytes, extract::{ Path, Query, Json, Multipart, Form }, http::StatusCode, response::IntoResponse, handler::HandlerWithoutStateExt};
 use tokio::net::TcpListener;
 use serde::{Deserialize, Serialize};
 use tower_http::services::ServeDir;
@@ -98,8 +98,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 绑定路由：GET 方法 + 路径 "/" + 处理函数 hello_world
     // .route("/", get(hello_world))
     .nest_service("/assets", ServeDir::new("static/assets"))
-
-    .fallback(fallback);
+    // .fallback_service(ServeDir::new("static"))
+    // .fallback(fallback);
+    .fallback_service(
+        ServeDir::new("static")
+            .fallback(fallback.into_service())
+    );
 
 
     // 绑定端口（返回 Result，需用 ? 处理错误）

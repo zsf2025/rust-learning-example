@@ -4,35 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# Web框架
 axum = "0.8.8"
-
-# 时间处理库，弥补了标准的std::time的功能不足（如缺少时区支持、灵活的时间解析/格式化）
-# serde 特性，让结构体中直接使用时间类型可以进行序列化/反序列化
-chrono = { version = "0.4.43", features = ["serde"] }
-# 用来加载指定路径的.env文件
-dotenvy = "0.15.7"
-
-# 序列化标准框架（定义“怎么转”的规范），derive是它的一个辅助特性（提供宏来自动神抽狗序列化/反序列化代码）
 serde = { version = "1.0.228", features = ["derive"] }
-
-# 基于serde定义的Serializa/Deserialize特性，来对数据进行JSON转换的“标准实现”
-serde_json = "1.0.149"
-
-# sqlx是Rust生态中异步、类型安全的SQL工具库
-# runtime-tokio特性：为sqlx提供异步运行时支持
-# sqlite: 启用SQLite数据库驱动与适配
-# chrono: 时间类型与数据库的自动映射
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "chrono"] }
-
-# Rust是 Rust 生态的事实标准异步运行时（负责调度异步任务、处理 IO 事件、管理线程池）
-# full是 tokio 的全量特性集
+tera = "1.20.1"
 tokio = { version = "1.49.0", features = ["full"] }
-
-# HTTP中间件集合库，快速增强HTTP服务的功能(如日志、身份验证、限流、CORS 等)
-# trace特性：自动记录每个请求的关键信息的特性
-tower-http = { version = "0.6.8", features = ["trace"] }
-# tracing是 Rust 中结构化日志、事件追踪与分布式链路追踪的核心库，理解为日志生产者
-tracing = "0.1.44"
-# 接收日志数据、格式化日志、输出的一个日志处理器
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }

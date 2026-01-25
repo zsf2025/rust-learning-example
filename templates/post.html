@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+
+{% block title %}{{ post.title }}{% endblock title %}
+
+{% block content %}
+    <h1>{{ post.title }}</h1>
+    <p style="white-space: pre-wrap;">{{ post.content }}</p>
+    <br>
+    <a href="/">« 返回列表</a>
+{% endblock content %}

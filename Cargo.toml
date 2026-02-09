@@ -1,15 +1,10 @@
 [package]
-name = "axum_chat_v8"
+name = "feat-axum_06"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = { version = "0.8.8", features = ["ws"] }
-# 高并发下的线程安全哈希表
-dashmap = "6.1.0"
-# 用于 WebSocket 的 Sink/Stream 处理
-futures-util = "0.3.31"
-serde = { version = "1.0.228", features = ["derive"] }
+axum = "0.8.8"
+chrono = "0.4.43"
+reqwest = "0.13.2"
 tokio = { version = "1.49.0", features = ["full"] }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }

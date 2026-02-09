@@ -1,117 +1,102 @@
 use axum:: {
-    extract:: {
-        ws::{Message, WebSocket, WebSocketUpgrade},
-        Query,
-        State,
-    },
-    response::IntoResponse,
-    routing::get,
-    Router,
+    http:: { Request, StatusCode },
+    middleware::Next,
+    response::Response,
 };
 
-use dashmap::DashMap;
-use tokio::sync::broadcast;
-use serde::Deserialize;
-use tracing::{info};
+use std::time::Instant;
+
+use axum::extract::State;
 use std::sync::Arc;
-use futures_util::{SinkExt, StreamExt};
+use tokio::sync::Semaphore;
 
-// 房间装填：每个房间ID对应一个广播通道的Sender
+use axum::{routing::get, Router, middleware};
+use std::net::SocketAddr;
+
+async fn logger_and_timer_middleware(
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // 1. 前置逻辑：记录开始时间
+    let start = Instant::now();
+    let mthod = req.method().clone();
+    let path = req.uri().path().to_owned();
+
+    // 2. 执行后续中间件及Handler
+    let mut response = next.run(req).await;
+
+    // 3. 后置逻辑：计算耗时
+    let duration = start.elapsed();
+    let duration_ms = format!("{:?}", duration);
+
+    // 任务2：在响应头添加X-Response-Time
+
+    response.headers_mut().insert(
+        "X-Response-Time",
+        axum::http::HeaderValue::from_str(&duration_ms).unwrap(),
+    );
+
+    // 任务1: 打印日志
+    println!("[{}] {} {}| Status: {} | Duration:{:?}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        mthod,
+        path,
+        response.status(),
+        duration
+    );
+    Ok(response)
+}
+
+#[derive(Clone)]
 struct AppState {
-    // Key: 房间名， value 广播发送端
-    rooms: DashMap<String, broadcast::Sender<String>>,
+    semaphore: Arc<Semaphore>,
 }
 
-#[derive(Deserialize)]
-struct RoomParams {
-    room: Option<String>,
+async fn rate_limit_middleware(
+    State(state): State<AppState>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode>{
+    // 尝试获取一个许可
+   // try_acquire 会立即返回，如果信号量已满，则返回错误
+   match state.semaphore.try_acquire() {
+    Ok(_permit) => {
+        // 获取成功，执行后续逻辑
+        // 注意：_permit 会在此函数结束时自动Drop，从而释放信号量
+        Ok(next.run(req).await)
+    }
+    Err(_) => {
+        // 获取失败，说明并发量已达上限
+        eprintln!("Too many requests!");
+        Err(StatusCode::TOO_MANY_REQUESTS)
+    }
+   }
 }
+
+
 
 #[tokio::main]
 async fn main() {
-    // 初始化日志系统
-    tracing_subscriber::fmt()
-        .with_env_filter("axum_chat_v8=info").init();
-
-    // 初始化共享状态
-    let state = Arc::new(AppState {
-        rooms: DashMap::new(),
-    });
-
-    let app = Router::new()
-        .route("/ws", get(ws_handler))
-        .with_state(state);
-    
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
-    info!("✅ 服务器运行中: ws://127.0.0.1:3000/ws");
-
-    axum::serve(listener, app).await.unwrap();
-}
-
-// WebSocket 处理器
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    Query(params): Query<RoomParams>,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    let room_id = params.room.unwrap_or_else(|| "default".to_string());
-
-    ws.on_upgrade(move |socket| handle_socket(socket, room_id, state))
-}
-
-async fn handle_socket(socket: WebSocket, room_id: String, state: Arc<AppState>) {
-    // 分离发送和接收
-    let (mut sink, mut stream) = socket.split();
-
-    // 获取or创建房间的广播通道
-    // 如果房间不存在则创建，通道容量设为100
-    let tx = state
-        .rooms
-        .entry(room_id.clone())
-        .or_insert_with(|| {
-            info!("🏠 创建新房间: {}", room_id);
-            let (tx, _rx) = broadcast::channel(100);
-            tx
-        })
-        .clone();
-    
-    // 订阅该房间的消息
-    let mut rx = tx.subscribe();
-    info!("👤 用户进入房间: {}", room_id);
-
-    // 创建两个并发任务处理收发
-
-    // 任务1： 接收房间广播，发送给当前客户端
-    let mut send_task = tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
-            if sink.send(Message::Text(msg.into())).await.is_err() {
-                break; // 客户端断开连接
-            }
-        }
-    });
-
-    // 任务2： 接收当前客户端发来的消息，广播给房间所有人
-    let tx_clone = tx.clone();
-    let room_id_clone = room_id.clone();
-    let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = stream.next().await {
-            if let Message::Text(text) = msg {
-                // 收到消息后，通过广播通道发送出去
-                let _ = tx_clone.send(format!("[{}]: {}", room_id_clone, text));
-            }
-        }
-    });
-// e. 只要有一个任务结束（客户端断开），就清理资源
-    tokio::select! {
-        _ = (&mut send_task) => recv_task.abort(),
-        _ = (&mut recv_task) => send_task.abort(),
+    // 初始化状态：限制最大并发数为 10
+    let state = AppState {
+        semaphore: Arc::new(Semaphore::new(3)),
     };
 
-    info!("🚪 用户离开房间: {}", room_id);
+    let app = Router::new()
+    .route("/", get(|| async { "Hello, World!" }))
+    .route("/slow", get(|| async {
+        // 模拟一个慢请求
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        "This is a slow response."
+    }))
+    // 应用限流中间件（带状态）
+    .layer(middleware::from_fn_with_state(state.clone(), rate_limit_middleware))
+    .layer(middleware::from_fn(logger_and_timer_middleware))
+    .with_state(state);
 
-    // f. 自动清理机制：如果房间没人了，删除该房间以释放内存
-    if tx.receiver_count() == 0 {
-        state.rooms.remove(&room_id);
-        info!("🗑️ 房间 {} 已关闭", room_id);
-    }
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    println!("Listening on {}", addr);
+
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }

@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rust Axum 文件服务</title>
+    <style>
+        :root { --primary: #2563eb; --danger: #dc2626; --success: #16a34a; --bg: #f8fafc; --card: #ffffff; --text: #1e293b; --border: #e2e8f0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+        
+        h1 { text-align: center; color: var(--primary); margin-bottom: 2rem; }
+        h2 { margin-top: 0; font-size: 1.25rem; border-bottom: 1px solid var(--border); padding-bottom: 0.8rem; margin-bottom: 1rem; display: flex; align-items: center; justify-content: space-between; }
+        
+        .card { background: var(--card); border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid var(--border); }
+        
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        .input-group { margin-bottom: 1rem; }
+        label { display: block; margin-bottom: 0.5rem; font-weight: 600; font-size: 0.9rem; color: #64748b; }
+        input[type="text"], input[type="file"], input[type="number"] { width: 100%; padding: 0.6rem 0.8rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; box-sizing: border-box; transition: border-color 0.2s; }
+        input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+        
+        .btn-group { display: flex; gap: 0.8rem; margin-top: 1rem; }
+        button { flex: 1; padding: 0.75rem 1rem; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.2s; color: white; background: var(--primary); }
+        button:hover { opacity: 0.9; transform: translateY(-1px); }
+        button:active { transform: translateY(0); }
+        button:disabled { background: #cbd5e1; cursor: not-allowed; transform: none; }
+        button.pause { background: var(--danger); }
+        button.resume { background: var(--success); }
+        
+        .progress-wrapper { margin-top: 1.5rem; }
+        .progress-meta { display: flex; justify-content: space-between; font-size: 0.85rem; color: #64748b; margin-bottom: 0.5rem; }
+        .progress-container { background: #e2e8f0; border-radius: 99px; height: 12px; overflow: hidden; position: relative; }
+        .progress-bar { background: var(--primary); height: 100%; width: 0%; transition: width 0.3s ease-out; background-image: linear-gradient(45deg,rgba(255,255,255,.15) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.15) 50%,rgba(255,255,255,.15) 75%,transparent 75%,transparent); background-size: 1rem 1rem; }
+        
+        .log-area { background: #0f172a; color: #4ade80; font-family: 'Menlo', 'Monaco', monospace; padding: 1rem; border-radius: 8px; height: 250px; overflow-y: auto; font-size: 0.85rem; white-space: pre-wrap; line-height: 1.4; border: 1px solid #334155; }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #1e293b; padding-bottom: 2px; }
+        .log-time { color: #94a3b8; margin-right: 8px; }
+        
+        /* 状态徽章 */
+        .badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
+        .badge.idle { background: #f1f5f9; color: #64748b; }
+        .badge.running { background: #dbeafe; color: var(--primary); }
+        .badge.paused { background: #fee2e2; color: var(--danger); }
+        .badge.done { background: #dcfce7; color: var(--success); }
+    </style>
+</head>
+<body>
+
+<h1>🦀 Rust Axum 文件服务测试台</h1>
+
+<div class="card">
+    <h2>🛠️ 全局配置</h2>
+    <div class="grid-2">
+        <div class="input-group">
+            <label>API 服务地址 (Base URL)</label>
+            <input type="text" id="baseUrl" value="http://localhost:3000">
+        </div>
+        <div class="input-group">
+            <label>API Key (权限验证)</label>
+            <input type="text" id="apiKey" value="secret-upload-key-123">
+        </div>
+    </div>
+</div>
+
+<!-- 上传模块 -->
+<div class="card">
+    <h2>
+        <span>📤 断点续传上传 (Resumable Upload)</span>
+        <span id="uploadStateBadge" class="badge idle">IDLE</span>
+    </h2>
+    <div class="input-group">
+        <label>选择文件 (建议 > 50MB)</label>
+        <input type="file" id="fileInput">
+    </div>
+    <div class="grid-2">
+        <div class="input-group">
+            <label>切片大小 (MB)</label>
+            <input type="number" id="uploadChunkSize" value="2" min="1" max="100">
+        </div>
+    </div>
+    
+    <div class="btn-group">
+        <button id="btnUploadStart" onclick="startUpload()">🚀 开始 / 继续上传</button>
+        <button id="btnUploadPause" class="pause" onclick="pauseUpload()" disabled>⏸ 暂停</button>
+    </div>
+
+    <div class="progress-wrapper">
+        <div class="progress-meta">
+            <span id="uploadStatusText">等待文件...</span>
+            <span id="uploadPercent">0%</span>
+        </div>
+        <div class="progress-container">
+            <div class="progress-bar" id="uploadBar"></div>
+        </div>
+    </div>
+</div>
+
+<!-- 下载模块 -->
+<div class="card">
+    <h2>
+        <span>📥 断点续传下载 (Resumable Download)</span>
+        <span id="downloadStateBadge" class="badge idle">IDLE</span>
+    </h2>
+    <div class="input-group">
+        <label>下载文件名 (需在 uploads 目录存在)</label>
+        <input type="text" id="downloadFileName" placeholder="例如: video.mp4">
+    </div>
+    
+    <div class="btn-group">
+        <button id="btnDownloadStart" onclick="startDownload()">▶ 开始 / 继续下载</button>
+        <button id="btnDownloadPause" class="pause" onclick="pauseDownload()" disabled>⏸ 暂停</button>
+    </div>
+
+    <div class="progress-wrapper">
+        <div class="progress-meta">
+            <span id="downloadStatusText">等待指令...</span>
+            <span id="downloadPercent">0%</span>
+        </div>
+        <div class="progress-container">
+            <div class="progress-bar" id="downloadBar"></div>
+        </div>
+    </div>
+</div>
+
+<!-- 日志模块 -->
+<div class="card">
+    <h2>📟 交互日志</h2>
+    <div class="log-area" id="console"></div>
+</div>
+
+<script>
+    // ================= 工具函数 =================
+    const $ = (id) => document.getElementById(id);
+    const log = (msg, type = 'info') => {
+        const el = $('console');
+        const time = new Date().toLocaleTimeString();
+        const div = document.createElement('div');
+        div.className = 'log-entry';
+        div.innerHTML = `<span class="log-time">[${time}]</span> ${msg}`;
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+    };
+    const formatSize = (bytes) => {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
+    // ================= 全局配置 =================
+    const getConfig = () => ({
+        baseUrl: $('baseUrl').value.replace(/\/$/, ''),
+        apiKey: $('apiKey').value
+    });
+
+    // ================= 上传逻辑 =================
+    let uploadState = {
+        isUploading: false,
+        abortController: null,
+        file: null,
+        uploadedSize: 0
+    };
+
+    // 检查服务器上已有的文件大小
+    async function checkServerFileSize(fileName) {
+        const { baseUrl } = getConfig();
+        try {
+            // 使用 HEAD 请求获取文件信息，不下载内容
+            const res = await fetch(`${baseUrl}/download/${fileName}`, { method: 'HEAD' });
+            if (res.status === 200) {
+                const len = res.headers.get("Content-Length");
+                return parseInt(len, 10) || 0;
+            }
+        } catch (e) {
+            // 忽略错误，假设文件不存在
+        }
+        return 0;
+    }
+
+    async function startUpload() {
+        const file = $('fileInput').files[0];
+        if (!file) return alert("请先选择一个文件！");
+
+        // UI 状态更新
+        uploadState.isUploading = true;
+        $('btnUploadStart').disabled = true;
+        $('btnUploadPause').disabled = false;
+        $('uploadStateBadge').className = 'badge running';
+        $('uploadStateBadge').innerText = 'UPLOADING';
+
+        // 如果是新文件，重置进度
+        if (uploadState.file !== file) {
+            log(`🔍 检测服务器状态: ${file.name}...`);
+            const serverSize = await checkServerFileSize(file.name);
+            if (serverSize > 0) {
+                if (serverSize === file.size) {
+                    log(`✅ 文件已存在且完整，无需上传。`);
+                    updateUploadProgress(file.size, file.size);
+                    resetUploadUI(true);
+                    return;
+                }
+                log(`⚡ 发现中断的上传记录，从 ${formatSize(serverSize)} 处续传 (共 ${formatSize(file.size)})`);
+                uploadState.uploadedSize = serverSize;
+            } else {
+                uploadState.uploadedSize = 0;
+            }
+            uploadState.file = file;
+        }
+
+        uploadLoop();
+    }
+
+    function pauseUpload() {
+        if (uploadState.isUploading) {
+            uploadState.isUploading = false;
+            if (uploadState.abortController) uploadState.abortController.abort();
+            
+            $('btnUploadStart').disabled = false;
+            $('btnUploadStart').innerText = "🚀 继续上传";
+            $('btnUploadPause').disabled = true;
+            $('uploadStateBadge').className = 'badge paused';
+            $('uploadStateBadge').innerText = 'PAUSED';
+            log(`⏸ 上传已暂停在 ${formatSize(uploadState.uploadedSize)}`);
+        }
+    }
+
+    async function uploadLoop() {
+        const { baseUrl, apiKey } = getConfig();
+        const { file } = uploadState;
+        const chunkSize = parseInt($('uploadChunkSize').value) * 1024 * 1024;
+
+        while (uploadState.isUploading && uploadState.uploadedSize < file.size) {
+            const start = uploadState.uploadedSize;
+            const end = Math.min(start + chunkSize, file.size);
+            const chunk = file.slice(start, end);
+
+            const formData = new FormData();
+            // 关键：文件名必须一致，后端才能追加
+            formData.append("file", chunk, file.name);
+
+            // 准备请求
+            uploadState.abortController = new AbortController();
+            const headers = { "X-API-Key": apiKey };
+            
+            // ⚠️ 关键逻辑：如果不是从头开始，告诉后端追加
+            if (start > 0) {
+                headers["X-Append"] = "true";
+            }
+
+            try {
+                log(`📤 发送切片: ${formatSize(start)} -> ${formatSize(end)} ${start > 0 ? '(Append)' : '(Create)'}`);
+                
+                const res = await fetch(`${baseUrl}/upload`, {
+                    method: "POST",
+                    headers: headers,
+                    body: formData,
+                    signal: uploadState.abortController.signal
+                });
+
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+                // 更新进度
+                uploadState.uploadedSize = end;
+                updateUploadProgress(uploadState.uploadedSize, file.size);
+
+            } catch (e) {
+                if (e.name === 'AbortError') return; // 用户手动暂停
+                log(`❌ 上传失败: ${e.message}`);
+                pauseUpload();
+                return;
+            }
+        }
+
+        if (uploadState.uploadedSize >= file.size) {
+            log(`✅ 上传完成！文件名: ${file.name}`);
+            resetUploadUI(true);
+            // 自动填入下载框方便测试
+            $('downloadFileName').value = file.name;
+        }
+    }
+
+    function updateUploadProgress(loaded, total) {
+        const percent = ((loaded / total) * 100).toFixed(1) + '%';
+        $('uploadBar').style.width = percent;
+        $('uploadPercent').innerText = percent;
+        $('uploadStatusText').innerText = `${formatSize(loaded)} / ${formatSize(total)}`;
+    }
+
+    function resetUploadUI(done = false) {
+        uploadState.isUploading = false;
+        uploadState.file = null;
+        uploadState.uploadedSize = 0;
+        $('btnUploadStart').disabled = false;
+        $('btnUploadStart').innerText = "🚀 开始上传";
+        $('btnUploadPause').disabled = true;
+        if (done) {
+            $('uploadStateBadge').className = 'badge done';
+            $('uploadStateBadge').innerText = 'DONE';
+        }
+    }
+
+    // ================= 下载逻辑 =================
+    let downloadState = {
+        isDownloading: false,
+        abortController: null,
+        fileName: "",
+        fileSize: 0,
+        downloadedSize: 0,
+        chunks: [] // 注意：大文件下载在浏览器内存中存 chunks 会崩溃，仅供演示原理
+    };
+
+    async function startDownload() {
+        const fileName = $('downloadFileName').value;
+        if (!fileName) return alert("请输入文件名");
+        const { baseUrl } = getConfig();
+
+        // UI 更新
+        downloadState.isDownloading = true;
+        $('btnDownloadStart').disabled = true;
+        $('btnDownloadPause').disabled = false;
+        $('downloadStateBadge').className = 'badge running';
+        $('downloadStateBadge').innerText = 'DOWNLOADING';
+
+        // 初始化：获取文件总大小
+        if (downloadState.fileName !== fileName || downloadState.downloadedSize === 0) {
+            downloadState.fileName = fileName;
+            downloadState.chunks = [];
+            downloadState.downloadedSize = 0;
+            
+            try {
+                log(`🔍 获取文件信息: ${fileName}...`);
+                const res = await fetch(`${baseUrl}/download/${fileName}`, { method: 'HEAD' });
+                if (!res.ok) throw new Error("文件不存在");
+                downloadState.fileSize = parseInt(res.headers.get("Content-Length")) || 0;
+                log(`📄 文件大小: ${formatSize(downloadState.fileSize)}`);
+            } catch (e) {
+                log(`❌ 无法获取文件: ${e.message}`);
+                resetDownloadUI();
+                return;
+            }
+        }
+
+        downloadLoop();
+    }
+
+    function pauseDownload() {
+        if (downloadState.isDownloading) {
+            downloadState.isDownloading = false;
+            if (downloadState.abortController) downloadState.abortController.abort();
+            
+            $('btnDownloadStart').disabled = false;
+            $('btnDownloadStart').innerText = "▶ 继续下载";
+            $('btnDownloadPause').disabled = true;
+            $('downloadStateBadge').className = 'badge paused';
+            $('downloadStateBadge').innerText = 'PAUSED';
+            log(`⏸ 下载已暂停在 ${formatSize(downloadState.downloadedSize)}`);
+        }
+    }
+
+    async function downloadLoop() {
+        const { baseUrl } = getConfig();
+        const chunkSize = 1024 * 1024; // 1MB 为单位切片下载，方便观察断点续传效果
+
+        while (downloadState.isDownloading && downloadState.downloadedSize < downloadState.fileSize) {
+            const start = downloadState.downloadedSize;
+            const end = Math.min(start + chunkSize - 1, downloadState.fileSize - 1); // Range 是包含的
+
+            downloadState.abortController = new AbortController();
+
+            try {
+                log(`⬇ 请求 Range: bytes=${start}-${end}`);
+                
+                const res = await fetch(`${baseUrl}/download/${downloadState.fileName}`, {
+                    headers: { 'Range': `bytes=${start}-${end}` },
+                    signal: downloadState.abortController.signal
+                });
+
+                if (res.status !== 206 && res.status !== 200) {
+                    throw new Error(`非 206/200 响应 (${res.status})`);
+                }
+
+                const blob = await res.blob();
+                downloadState.chunks.push(blob);
+                downloadState.downloadedSize += blob.size;
+
+                updateDownloadProgress(downloadState.downloadedSize, downloadState.fileSize);
+
+                // 人为一点延迟，让你有时间点暂停
+                await new Promise(r => setTimeout(r, 100));
+
+            } catch (e) {
+                if (e.name === 'AbortError') return;
+                log(`❌ 下载中断: ${e.message}`);
+                pauseDownload();
+                return;
+            }
+        }
+
+        if (downloadState.downloadedSize >= downloadState.fileSize) {
+            log(`✅ 下载完成！正在合并 ${downloadState.chunks.length} 个切片...`);
+            saveFile();
+        }
+    }
+
+    function saveFile() {
+        const blob = new Blob(downloadState.chunks);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = downloadState.fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        resetDownloadUI(true);
+    }
+
+    function updateDownloadProgress(loaded, total) {
+        const percent = ((loaded / total) * 100).toFixed(1) + '%';
+        $('downloadBar').style.width = percent;
+        $('downloadPercent').innerText = percent;
+        $('downloadStatusText').innerText = `${formatSize(loaded)} / ${formatSize(total)}`;
+    }
+
+    function resetDownloadUI(done = false) {
+        downloadState.isDownloading = false;
+        $('btnDownloadStart').disabled = false;
+        $('btnDownloadStart').innerText = "▶ 开始下载";
+        $('btnDownloadPause').disabled = true;
+        if (done) {
+            $('downloadStateBadge').className = 'badge done';
+            $('downloadStateBadge').innerText = 'DONE';
+            downloadState.downloadedSize = 0;
+            downloadState.chunks = [];
+        } else {
+            $('downloadStateBadge').className = 'badge idle';
+            $('downloadStateBadge').innerText = 'IDLE';
+        }
+    }
+</script>
+
+</body>
+</html>
